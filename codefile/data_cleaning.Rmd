@@ -1,0 +1,589 @@
+---
+title: "Data preparation notebook"
+output: html_notebook
+---
+
+Author: lprtk
+
+Data Mining for credit risk
+
+
+# Pre-processing et data preparation
+
+
+#### Librairies
+```{r}
+# Define the libraries to be used
+libraries_used <- 
+  c("arules", "caret","corrplot" ,"dplyr", "lubridate", "mice", 
+    "naniar", "stringr", "superml", "tidyr", "UpSetR", "visdat", "VIM")
+
+# Verification of installed libraries
+libraries_missing <- 
+  libraries_used[!(libraries_used %in% installed.packages()[,"Package"])]
+
+# Install missing libraries
+if(length(libraries_missing)) install.packages(libraries_missing)
+```
+
+
+#### Librairies import
+```{r}
+library(arules)
+library(caret)
+library(corrplot)
+library(dplyr)
+library(lubridate)
+library(mice)
+library(naniar)
+library(stringr)
+library(superml)
+library(tidyr)
+library(UpSetR)
+library(visdat)
+library(VIM)
+```
+
+-------------------------------------------------------------------------------------------------
+
+#### Function definition
+```{r}
+# Function to discretize a variable
+discretizer <- function(column) {
+  
+  column <- cut(column, breaks = c(0, 12, 24, 60, 120, Inf) , labels = c(1, 2, 3, 4, 5),
+                include.lowest = FALSE, right = TRUE)
+}
+
+# Function to transform a character variable into a factor
+to_factor <- function(variable) {
+  
+  variable <- as.factor(variable)
+}
+```
+
+-------------------------------------------------------------------------------------------------
+
+#### Data import
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "/datamining")
+```
+
+
+```{r}
+data <- read.csv("data_lending_club.csv")
+```
+
+
+#### Data description
+```{r}
+str(data)
+```
+
+
+#### Data header
+```{r}
+head(data)
+```
+
+
+#### Split Test Train of the database
+```{r}
+trainDT <- sample(1:nrow(data), 0.8*nrow(data))
+train <- data[trainDT,]
+test <- data[-trainDT,]
+```
+
+-------------------------------------------------------------------------------------------------
+
+# First cleaning of the database
+
+`
+- Deletion of variables called "useless" because they have a unique value per client, they are non-disciminates or they provide the same information as other variables;
+- Deletion of the variables called "unavailable" because we do not have this information at the time of the study of the client's file to grant him a possible loan.
+`
+#### Removal of certain features
+```{r}
+# Unnecessary columns: do not allow to discriminate a client, or redundant information
+useless <- c("id", "member_id", "url", "zip_code", "title", "desc", "pymnt_plan", "emp_title", "initial_list_status", "policy_code", "addr_state", "sub_grade", "issue_d", "funded_amnt", "funded_amnt_inv", "verification_status_joint", "disbursement_method", "earliest_cr_line")
+
+# Variables unavailable at the time of the client's file review
+unavailable <- c("out_prncp", "out_prncp_inv", "total_pymnt", "total_pymnt_inv", "total_rec_prncp", "funded_amnt_inv", "total_rec_int", "total_rec_late_fee", "recoveries", "collection_recovery_fee", "next_pymnt_d", "last_credit_pull_d", "last_pymnt_d", "last_pymnt_amnt")
+
+data <- data[,!(names(data) %in% useless)]
+data <- data[,!(names(data) %in% unavailable)]
+```
+
+
+#### Visualization of missing values
+```{r}
+vis_miss(data, warn_large_data = FALSE)
+```
+
+#### Supression of variables with 100% missing values
+```{r}
+# Variables with 100% missing values
+missing_values <- sapply(data, function(x) sum(is.na(x))) 
+missing_values[missing_values == nrow(data)]
+```
+
+```{r}
+all_na = c("revol_bal_joint", "sec_app_fico_range_high", "sec_app_inq_last_6mths", "sec_app_open_acc", "sec_app_open_act_il", "sec_app_chargeoff_within_12_mths", "sec_app_mths_since_last_major_derog", "sec_app_fico_range_low", "sec_app_earliest_cr_line", "sec_app_mort_acc", "sec_app_revol_util", "sec_app_num_rev_accts", "sec_app_collections_12_mths_ex_med")
+
+data <- data[,!(names(data) %in% all_na)]
+```
+
+
+#### Definition of the target variable
+```{r}
+data <- data[!(data$loan_status == "Current" | data$loan_status == "In Grace Period"),]
+
+data$default <- ifelse(data$loan_status == "Fully Paid"| data$loan_status == "Does not meet the credit policy. Status:Fully Paid", "no", "yes")
+```
+
+#### Verification
+```{r}
+table(data$default)
+```
+
+-------------------------------------------------------------------------------------------------
+
+# Feature engeneering
+
+`
+- Discretization;
+- Type transformation and format;
+- Union of some variables;
+- New deletion of variables.
+`
+
+#### Calls the "discretizer" function for several features
+```{r}
+discretizer(data$mths_since_last_delinq)
+discretizer(data$mths_since_last_record)
+discretizer(data$mths_since_last_major_derog)
+discretizer(data$mths_since_recent_revol_delinq)
+discretizer(data$mths_since_recent_bc_dlq)
+discretizer(data$mths_since_rcnt_il)
+discretizer(data$mo_sin_old_il_acct)
+discretizer(data$mo_sin_old_rev_tl_op)
+discretizer(data$mo_sin_rcnt_rev_tl_op)
+discretizer(data$mo_sin_rcnt_tl)
+discretizer(data$mths_since_recent_bc)
+discretizer(data$mths_since_recent_inq)
+
+# Replacement of NA by 0 for all discretized variables because they are not "true" missing values
+data <- data %>% mutate( 
+  mths_since_last_delinq = ifelse(is.na(mths_since_last_delinq), 0, mths_since_last_delinq),
+  mths_since_last_record = ifelse(is.na(mths_since_last_record), 0, mths_since_last_record),
+  mths_since_last_major_derog = ifelse(is.na(mths_since_last_major_derog), 0, mths_since_last_major_derog),
+  mths_since_recent_revol_delinq = ifelse(is.na(mths_since_recent_revol_delinq), 0, mths_since_recent_revol_delinq),
+  mths_since_recent_bc_dlq = ifelse(is.na(mths_since_recent_bc_dlq), 0, mths_since_recent_bc_dlq),
+  mths_since_rcnt_il = ifelse(is.na(mths_since_rcnt_il), 0, mths_since_rcnt_il),
+  mo_sin_old_il_acct = ifelse(is.na(mo_sin_old_il_acct), 0, mo_sin_old_il_acct),
+  mo_sin_old_rev_tl_op = ifelse(is.na(mo_sin_old_rev_tl_op), 0, mo_sin_old_rev_tl_op),
+  mo_sin_rcnt_rev_tl_op = ifelse(is.na(mo_sin_rcnt_rev_tl_op), 0, mo_sin_rcnt_rev_tl_op),
+  mo_sin_rcnt_tl = ifelse(is.na(mo_sin_rcnt_tl), 0, mo_sin_rcnt_tl),
+  mths_since_recent_bc = ifelse(is.na(mths_since_recent_bc), 0, mths_since_recent_bc),
+  mths_since_recent_inq = ifelse(is.na(mths_since_recent_inq), 0, mths_since_recent_inq)
+  )
+```
+
+
+#### Transform character to factor
+```{r}
+to_factor(data$grade)
+to_factor(data$verification_status)
+to_factor(data$home_ownership)
+to_factor(data$purpose)
+to_factor(data$application_type)
+```
+
+
+#### Conversion of the "term" variable into a numerical variable
+```{r}
+data$term <- str_replace_all(data$term, " months", "")
+data$term <- as.numeric(data$term)
+```
+
+
+#### Conversion of the variable "emp length" into a numerical variable
+```{r}
+data$emp_length <- str_replace_all(data$emp_length, " years","") 
+data$emp_length <- str_replace_all(data$emp_length, " year","")
+data$emp_length <- str_replace_all(data$emp_length, "< 1","0")
+data$emp_length <- str_replace_all(data$emp_length, "[+]","") 
+
+data$emp_length <- as.numeric(data$emp_length)
+```
+
+
+#### Grouping of joint borrowers into a single column
+```{r}
+data$annual_inc <- pmax(data$annual_inc_joint, data$annual_inc, na.rm = TRUE)
+data$dti <- pmin(data$dti, data$dti_joint, na.rm = TRUE)
+
+```
+
+
+#### Deletion of certain variables following feature engineering
+```{r}
+second_drop <- c("annual_inc_joint", "dti_joint", "loan_status")
+    
+hardships <- c("orig_projected_additional_accrued_interest", "hardship_end_date", "hardship_start_date", "hardship_type", "hardship_reason", "hardship_status", "deferral_term", "hardship_last_payment_amount", "hardship_payoff_balance_amount", "hardship_loan_status", "hardship_dpd", "hardship_length", "payment_plan_start_date", "hardship_amount", "hardship_flag")
+    
+settlement <- c("settlement_term", "debt_settlement_flag_date", "settlement_status", "settlement_date","settlement_amount", "settlement_percentage", "debt_settlement_flag")
+
+data <- data[,!(names(data) %in% second_drop)]
+data <- data[,!(names(data) %in% hardships)]
+data <- data[,!(names(data) %in% settlement)]
+```
+
+--------------------------------------------------------------------------------------------------
+
+#### Outliers management
+```{r}
+
+data <- filter(data, annual_inc < quantile(data$annual_inc, probs = 0.95))
+data <- filter(data, int_rate < quantile(data$int_rate, probs = 0.95))
+```
+
+--------------------------------------------------------------------------------------------------
+
+# Treatment of missing values 
+
+`
+- Detection of missing values;
+- Identification of the process;
+- Imputation according to the nature of the missing value.
+`
+
+#### Summary of remaining missing values
+```{r}
+missing_values  <- sapply(data, function(x) sum(is.na(x))) 
+sort(missing_values[missing_values != 0])
+```
+
+
+## Missing at Random (MAR)
+
+#### Treatment of missing values : MAR
+```{r}
+na_MAR = c("open_acc_6m", "open_act_il", "open_il_12m", "open_il_24m", "total_bal_il", "open_rv_12m", "open_rv_24m", "max_bal_bc", "all_util" , "inq_fi", "total_cu_tl", "inq_last_12m")
+
+miss_data_MAR <- select(data,all_of(na_MAR))
+
+gg_miss_upset(miss_data_MAR, nsets = 20)
+```
+
+#### Multiple imputation on mixed data
+```{r}
+imputed <- mice(miss_data_MAR, meth = "pmm", m = 5, printFlag = FALSE)
+
+# see imputed values (5 imputations per variable)
+imputed$imp
+```
+
+#### Storage of the 5 multiple imputations
+```{r}
+imputed_data_MAR_1 <- complete(imputed, action = 1)
+imputed_data_MAR_2 <- complete(imputed, action = 2)
+imputed_data_MAR_3 <- complete(imputed, action = 3)
+imputed_data_MAR_4 <- complete(imputed, action = 4)
+imputed_data_MAR_5 <- complete(imputed, action = 5)
+```
+
+#### Checking for missing values after imputation
+```{r}
+gg_miss_var(imputed_data_MAR_2)
+```
+
+
+## Missing Completly at Random (MCAR)
+
+#### Treatment of missing values : MCAR
+```{r}
+missing_values  = sapply(data, function(x) sum(is.na(x))) 
+sort(missing_values[missing_values != 306 & missing_values != 0 ])
+```
+
+```{r}
+na_MCAR = c("revol_util", "bc_open_to_buy", "bc_util", "percent_bc_gt_75", "num_tl_120dpd_2m", "emp_length", "il_util")
+
+miss_data_MCAR <- select(data,all_of(na_MCAR))
+gg_miss_upset(miss_data_MCAR, nsets = 20)
+```
+
+#### Imputation using the kNN method
+```{r}
+imputed_data_MCAR <-  kNN(miss_data_MCAR)
+data_imputed <- cbind(imputed_data_MAR_2,imputed_data_MCAR[,1:7])
+```
+
+#### Visualization of the remaining missing values
+```{r}
+gg_miss_var(data_imputed)
+```
+
+
+#### Construction of the final database
+```{r}
+# Retrieving the name of columns containing NA
+names(data_imputed)
+```
+
+```{r}
+na_var <- c("open_acc_6m", "open_act_il", "open_il_12m", "open_il_24m", "total_bal_il",    "open_rv_12m", "open_rv_24m", "max_bal_bc", "all_util", "inq_fi", "total_cu_tl", "inq_last_12m", "revol_util", "bc_open_to_buy","bc_util", "percent_bc_gt_75", "num_tl_120dpd_2m", "emp_length", "il_util")
+
+# Creation of a table without the variables having NA (Objective: to rebuild the initial base by replacing the NA by the imputed values)
+data_without_na <- data[,!(names(data) %in% na_var)]
+```
+
+#### Final dataframe
+```{r}
+data_cleaned <- cbind(data_without_na, data_imputed)
+```
+
+
+#### Check if the missing values of the database have been cleaned
+```{r}
+gg_miss_var(data_cleaned)
+```
+
+--------------------------------------------------------------------------------------------------
+
+# Study of correlations
+
+
+#### Calculation of correlations
+```{r}
+corr_simple <- function(data =  data_cleaned, sig = 0.8){
+  
+  df_cor <- data %>% mutate_if(is.character, as.factor)
+  df_cor <- df_cor %>% mutate_if(is.factor, as.numeric)
+  
+  corr <- cor(df_cor)
+      
+  corr[lower.tri(corr,diag=TRUE)] <- NA 
+  
+  corr[corr == 1] <- NA 
+  
+  corr <- as.data.frame(as.table(corr))
+   
+  corr <- na.omit(corr) 
+    
+  corr <- subset(corr, abs(Freq) > sig) 
+  
+  corr <- corr[order(-abs(corr$Freq)),] 
+  
+  print(corr)
+  
+  mtx_corr <- reshape2::acast(corr, Var1~Var2, value.var="Freq")
+  
+  corrplot(mtx_corr, is.corr=FALSE, tl.col="black", na.label=" ")
+}
+
+corr_simple()
+```
+
+#### Suppression of overly correlated variables
+```{r}
+drop_corr_var <- c("fico_range_high", "num_sats", "tot_cur_bal","num_actv_rev_tl", "total_bal_il","total_bal_ex_mort","bc_open_to_buy", "percent_bc_gt_75", "revol_util", "num_bc_tl", "acc_open_past_24mths", "num_bc_sats", "num_tl_30dpd", "num_op_rev_tl", "open_rv_12m", "num_actv_rev_tl", "total_rev_hi_lim", "num_rev_tl_bal_gt_0")
+
+data_cleaned <- data_cleaned[,!(names(data_cleaned) %in% drop_corr_var)]
+```
+
+--------------------------------------------------------------------------------------------------
+
+# Encoding qualitative variables
+
+
+#### Label Encoding
+```{r}
+lbl <- LabelEncoder$new()
+data_cleaned$grade <- lbl$fit_transform(data_cleaned$grade)
+data_cleaned$application_type <- lbl$fit_transform(data_cleaned$application_type)
+```
+
+
+#### One Hot Encoding
+```{r}
+dummy <- dummyVars(" ~ .", data = data_cleaned)
+
+final_df <- data.frame(predict(dummy, newdata = data_cleaned))
+```
+
+
+#### Verification of the re-encoding on the final base
+```{r}
+str(final_df)
+```
+
+--------------------------------------------------------------------------------------------------
+
+# Definition of a function containing all the pre-processing
+
+
+#### Application of the pre_processing function to the train and the test
+```{r}
+pre_processing <- function(data) {
+  
+  # First deletion
+  useless <- c("id", "member_id", "url", "zip_code", "title", "desc", "pymnt_plan" , "emp_title" , "initial_list_status", "policy_code", "addr_state", "sub_grade", "issue_d", "funded_amnt", "funded_amnt_inv", "verification_status_joint", "disbursement_method", "earliest_cr_line")
+  
+  unavailable <- c("out_prncp","out_prncp_inv","total_pymnt","total_pymnt_inv", "total_rec_prncp", "funded_amnt_inv", "total_rec_int","total_rec_late_fee", "recoveries", "collection_recovery_fee", "next_pymnt_d", "last_credit_pull_d","last_pymnt_d","last_pymnt_amnt")
+  
+  data <- data[,!(names(data) %in% useless)]
+  data <- data[,!(names(data) %in% unavailable)]
+  
+  # Deletion of variables with 100% NA
+  all_na <- c("revol_bal_joint", "sec_app_fico_range_high", "sec_app_inq_last_6mths", "sec_app_open_acc", "sec_app_open_act_il", "sec_app_chargeoff_within_12_mths", "sec_app_mths_since_last_major_derog", "sec_app_fico_range_low", "sec_app_earliest_cr_line", "sec_app_mort_acc", "sec_app_revol_util", "sec_app_num_rev_accts", "sec_app_collections_12_mths_ex_med")
+
+  data <- data[,!(names(data) %in% all_na)]
+  
+  # Definition of the target
+  data <- data[!(data$loan_status == "Current" | data$loan_status == "In Grace Period"),]
+  data$default <- ifelse(data$loan_status == "Fully Paid"| data$loan_status == "Does not meet the credit policy. Status:Fully Paid", "no", "yes")
+  
+  # Calls the discretizer function for multiple columns
+  discretizer(data$mths_since_last_delinq)
+  discretizer(data$mths_since_last_record)
+  discretizer(data$mths_since_last_major_derog)
+  discretizer(data$mths_since_recent_revol_delinq)
+  discretizer(data$mths_since_recent_bc_dlq)
+  discretizer(data$mths_since_rcnt_il)
+  discretizer(data$mo_sin_old_il_acct)
+  discretizer(data$mo_sin_old_rev_tl_op)
+  discretizer(data$mo_sin_rcnt_rev_tl_op)
+  discretizer(data$mo_sin_rcnt_tl)
+  discretizer(data$mths_since_recent_bc)
+  discretizer(data$mths_since_recent_inq)
+  
+  # Replacement of NA by 0 for all discretized variables because they are not "true" missing values
+  data <- data %>% mutate( 
+    mths_since_last_delinq = ifelse(is.na(mths_since_last_delinq), 0, mths_since_last_delinq),
+    mths_since_last_record = ifelse(is.na(mths_since_last_record), 0, mths_since_last_record),
+    mths_since_last_major_derog = ifelse(is.na(mths_since_last_major_derog), 0, mths_since_last_major_derog),
+    mths_since_recent_revol_delinq = ifelse(is.na(mths_since_recent_revol_delinq), 0, mths_since_recent_revol_delinq),
+    mths_since_recent_bc_dlq = ifelse(is.na(mths_since_recent_bc_dlq), 0, mths_since_recent_bc_dlq),
+    mths_since_rcnt_il = ifelse(is.na(mths_since_rcnt_il), 0, mths_since_rcnt_il),
+    mo_sin_old_il_acct = ifelse(is.na(mo_sin_old_il_acct), 0, mo_sin_old_il_acct),
+    mo_sin_old_rev_tl_op = ifelse(is.na(mo_sin_old_rev_tl_op), 0, mo_sin_old_rev_tl_op),
+    mo_sin_rcnt_rev_tl_op = ifelse(is.na(mo_sin_rcnt_rev_tl_op), 0, mo_sin_rcnt_rev_tl_op),
+    mo_sin_rcnt_tl = ifelse(is.na(mo_sin_rcnt_tl), 0, mo_sin_rcnt_tl),
+    mths_since_recent_bc = ifelse(is.na(mths_since_recent_bc), 0, mths_since_recent_bc),
+    mths_since_recent_inq = ifelse(is.na(mths_since_recent_inq), 0, mths_since_recent_inq)
+    )
+  
+  # Transform character to factor
+  to_factor(data$grade)
+  to_factor(data$verification_status)
+  to_factor(data$home_ownership)
+  to_factor(data$purpose)
+  to_factor(data$application_type)
+  
+  # Conversion of the variable "term" into a numerical variable
+  data$term <- str_replace_all(data$term, " months", "")
+  data$term <- as.numeric(data$term)
+  
+  # Conversion of the "emp_length" variable into a numeric variable
+  data$emp_length <- str_replace_all(data$emp_length, " years", "") 
+  data$emp_length <- str_replace_all(data$emp_length, " year", "")
+  data$emp_length <- str_replace_all(data$emp_length, "< 1", "0")
+  data$emp_length <- str_replace_all(data$emp_length, "[+]", "") 
+  
+  data$emp_length = as.numeric(data$emp_length)
+  
+  # Grouping of joint borrowers into a single column
+  data$annual_inc <- pmax(data$annual_inc_joint, data$annual_inc, na.rm = TRUE)
+  data$dti <- pmin(data$dti, data$dti_joint, na.rm = TRUE)
+  
+  # Supprimer les variables qui suivent l'ingénierie des fonctionnalités
+  second_drop <- c("annual_inc_joint", "dti_joint", "loan_status")
+      
+  hardships <- c("orig_projected_additional_accrued_interest","hardship_end_date", "hardship_start_date", "hardship_type",   "hardship_reason","hardship_status", "deferral_term", "hardship_last_payment_amount","hardship_payoff_balance_amount","hardship_loan_status", "hardship_dpd", "hardship_length", "payment_plan_start_date", "hardship_amount", "hardship_flag")
+      
+  settlement <- c("settlement_term", "debt_settlement_flag_date", "settlement_status", "settlement_date","settlement_amount", "settlement_percentage", "debt_settlement_flag")
+  
+  data <- data[,!(names(data) %in% second_drop)]
+  data <- data[,!(names(data) %in% hardships)]
+  data <- data[,!(names(data) %in% settlement)]
+  
+  # Outliers management
+  data <- filter(data, annual_inc < quantile(data$annual_inc, probs = 0.95))
+  data <- filter(data, int_rate < quantile(data$int_rate, probs = 0.95))
+  
+  # Treatment of missing values : MAR
+  na_MAR = c("open_acc_6m", "open_act_il", "open_il_12m", "open_il_24m", "total_bal_il", "open_rv_12m", "open_rv_24m", "max_bal_bc", "all_util" , "inq_fi", "total_cu_tl", "inq_last_12m")
+  
+  miss_data_MAR <- select(data,all_of(na_MAR))
+  
+  # Multiple imputation on mixed data
+  imputed <- mice(miss_data_MAR, meth = "pmm", m = 5, printFlag = FALSE)
+  imputed_data_MAR_2 <- complete(imputed, action = 2)
+
+  # Treatment of missing values : MCAR
+  na_MCAR <- c("revol_util", "bc_open_to_buy", "bc_util", "percent_bc_gt_75", "num_tl_120dpd_2m", "emp_length", "il_util")
+
+  miss_data_MCAR <- select(data,all_of(na_MCAR))
+  
+  # Imputation using the kNN method
+  imputed_data_MCAR <- kNN(miss_data_MCAR)
+  data_imputed <- cbind(imputed_data_MAR_2,imputed_data_MCAR[,1:7])
+  
+  na_var <- c("open_acc_6m", "open_act_il", "open_il_12m", "open_il_24m", "total_bal_il",  "open_rv_12m", "open_rv_24m", "max_bal_bc", "all_util", "inq_fi", "total_cu_tl", "inq_last_12m",   "revol_util", "bc_open_to_buy","bc_util", "percent_bc_gt_75", "num_tl_120dpd_2m", "emp_length", "il_util")
+
+  # Creation of a table without the variables having NA (Objective: to rebuild the initial base by replacing the NA with the imputed values)
+  data_without_na <- data[,!(names(data) %in% na_var)]
+  
+  # Final dataframe
+  data_cleaned = cbind(data_without_na, data_imputed)
+  
+  # Removal of variables that are too correlated
+  drop_corr_var = c("fico_range_high", "num_sats", "tot_cur_bal","num_actv_rev_tl", "total_bal_il","total_bal_ex_mort","bc_open_to_buy", "percent_bc_gt_75", "revol_util", "num_bc_tl", "acc_open_past_24mths", "num_bc_sats", "num_tl_30dpd", "num_op_rev_tl", "open_rv_12m", "num_actv_rev_tl", "total_rev_hi_lim", "num_rev_tl_bal_gt_0")
+  
+  data_cleaned <- data_cleaned[,!(names(data_cleaned) %in% drop_corr_var)]
+  
+  # Label Encoding
+  lbl = LabelEncoder$new()
+  data_cleaned$grade = lbl$fit_transform(data_cleaned$grade)
+  data_cleaned$application_type = lbl$fit_transform(data_cleaned$application_type)
+  
+  # One Hot Encoding
+  dummy <- dummyVars(" ~ .", data = data_cleaned)
+  final_df <- data.frame(predict(dummy, newdata = data_cleaned))
+  
+  return(data_cleaned)
+}
+```
+
+#### Application of the pre-processing function on the trainset
+```{r}
+train <- pre_processing(train)
+```
+
+#### Application of the pre-processing function on the testset
+```{r}
+test <- pre_processing(test)
+```
+
+--------------------------------------------------------------------------------------------------
+
+# Export
+
+#### Export to csv
+```{r}
+write.csv(train, "train.csv", row.names = FALSE)
+write.csv(test, "test.csv", row.names = FALSE)
+```
+
+
+#### Checking the target rate
+```{r}
+table(train$default)
+
+table(test$default)
+```
+
+--------------------------------------------------------------------------------------------------

@@ -1,0 +1,447 @@
+---
+title: "Supervised analysis notebook"
+output: html_notebook
+---
+
+Author: lprtk
+
+Data Mining for credit risk
+
+
+# Supervised learning
+
+
+#### Librairies
+```{r}
+# Define the libraries to be used
+libraries_used <- 
+  c("caret", "dplyr", "gbm", "randomForest", "rpart", "rpart.plot", "superml")
+
+# Verification of installed libraries
+libraries_missing <- 
+  libraries_used[!(libraries_used %in% installed.packages()[,"Package"])]
+
+# Install missing libraries
+if(length(libraries_missing)) install.packages(libraries_missing)
+```
+
+
+#### Librairies import
+```{r}
+library(caret)
+library(dplyr)
+library(gbm)
+library(randomForest)
+library(rpart)
+library(rpart.plot) 
+library(superml)
+```
+
+--------------------------------------------------------------------------------------------------
+
+#### Function to rank the predicted probabilities according to the selected cut-off
+```{r}
+model_pred_t <- function(pred, t) ifelse(pred > t, "yes", "no")
+```
+
+-------------------------------------------------------------------------------------------------
+
+#### Data import
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "/datamining/")
+```
+
+
+```{r}
+train <- read.csv("train.csv")
+test <- read.csv("test.csv")
+```
+
+
+#### Conversion of target to factor
+```{r}
+test$default = as.factor(test$default)
+```
+
+
+#### Variables selected by dimensionality reduction methods
+```{r}
+model_vars <-
+  c("open_acc", "total_acc", "mo_sin_rcnt_tl", "num_il_tl", "num_rev_accts", "num_tl_op_past_12m", "tot_hi_cred_lim", "total_il_high_credit_limit", "open_acc_6m", "open_il_12m", "open_il_24m", "open_rv_24m", "inq_last_12m", "loan_amnt", "int_rate", "installment", "annual_inc", "fico_range_low", "revol_bal", "last_fico_range_high", "avg_cur_bal", "total_bc_limit", "max_bal_bc", "mo_sin_rcnt_rev_tl_op", "mths_since_recent_bc", "num_actv_bc_tl", "pct_tl_nvr_dlq", "open_act_il", "all_util", "bc_util", "dti", "mths_since_last_delinq", "mths_since_last_major_derog", "mths_since_recent_bc_dlq", "mths_since_recent_revol_delinq", "num_accts_ever_120_pd", "default")
+```
+
+```{r}
+train <- train [, model_vars]
+test <- test [, model_vars]
+```
+
+-------------------------------------------------------------------------------------------------
+
+# Modeling
+
+
+#### Imbalanced dataset
+```{r}
+# Down-sampling method
+train_down <- 
+  caret::downSample(x = train[, !(names(train) %in% c("default"))], 
+                    y = as.factor(train$default), yname = "default")
+
+base::prop.table(table(train_down$default))
+```
+
+```{r}
+base::table(train_down$default)
+```
+
+
+## Logistic regression
+
+```{r}
+ctrl <- 
+  trainControl(method = "repeatedcv", 
+               number = 10,
+               repeats = 5,
+               classProbs = TRUE,
+               summaryFunction = twoClassSummary,
+               savePredictions = TRUE,
+               verboseIter = FALSE
+              )
+
+model_glm <-
+  train_down %>%
+  train(default ~ ., 
+        data = ., 
+        method = "glm", 
+        family = "binomial",
+        metric = "ROC",
+        trControl = ctrl)
+
+summary(model_glm)
+```
+
+#### Feature importance
+```{r}
+varImp(model_glm)
+```
+
+```{r}
+plot(varImp(model_glm))
+```
+
+#### Model predictions
+```{r}
+model_glm_pred <- 
+  predict(model_glm, 
+          newdata = test ,
+          type = "prob")
+```
+
+#### Confusion matrix
+```{r}
+caret::confusionMatrix(
+  data = as.factor(ifelse(model_glm_pred[, "yes"] > 0.5, "yes", "no")), 
+  reference = test$default,
+  positive = "yes")
+```
+
+#### Metrics : AUC ROC
+```{r}
+roc_glm <- 
+  pROC::roc(response = test$default, 
+            predictor = model_glm_pred[, "yes"])
+
+roc_glm
+```
+
+#### Plot ROC Curve
+```{r}
+pROC::plot.roc(x = roc_glm, legacy.axes = FALSE, xlim = c(1, 0), asp = NA,
+               col = "green", print.auc = FALSE, print.auc.y = .4)
+
+legend(x = "bottomright", legend=c(sprintf("glm AUC = %s",round(roc_glm$auc[1],4))), 
+       col = c("green"), lty = 1, cex = 1.0)
+
+```
+
+
+## Decision Tree
+
+#### Training 1: we leave the cp parameter by default
+```{r}
+ctrl <- 
+  trainControl(method = "repeatedcv", 
+               number = 10,
+               repeats = 5,
+               classProbs = TRUE,
+               summaryFunction = twoClassSummary,
+               verboseIter = FALSE,
+               allowParallel = TRUE
+               )
+
+
+
+model_rpart <-
+  train_down %>%
+  train(default ~ .,
+        data = .,
+        method = 'rpart',
+        metric = "ROC",
+        preProc = c("center", "scale"),
+        trControl = ctrl)
+
+model_rpart
+```
+
+#### Graphic representation of the model
+```{r}
+ggplot(model_rpart)
+```
+
+```{r}
+plot(model_rpart$finalModel, uniform = TRUE, margin = 0.2)
+graphics::text(model_rpart$finalModel)
+```
+
+
+#### Training 2: in a random way, several cp parameters will be used to estimate the model. The selected cp will be the one that maximizes the AUC ROC of the model
+```{r}
+ctrl <- 
+  trainControl(method = "repeatedcv", 
+               number = 10,
+               repeats = 5,
+               classProbs = TRUE,
+               summaryFunction = twoClassSummary,
+               verboseIter = FALSE,
+               allowParallel = TRUE,
+               search = "random")
+
+model_rpart <-
+  train_down %>%
+  train(default ~ .,
+        data = .,
+        method = 'rpart',
+        metric = "ROC",
+        preProc = c("center", "scale"),
+        trControl = ctrl)
+
+model_rpart
+```
+
+#### Representation of the better performing model now that the cp is optimal
+```{r}
+plot(model_rpart$finalModel, uniform = TRUE, margin = 0.1)
+graphics::text(model_rpart$finalModel, cex = 0.5)
+```
+
+#### Model predictions
+```{r}
+model_rpart_pred <- 
+  predict(model_rpart, 
+          newdata = test , 
+          type = "prob")
+```
+
+#### Confusion matrix
+```{r}
+caret::confusionMatrix(
+  data = as.factor(ifelse(model_rpart_pred[, "yes"] > 0.5, "yes", "no")), 
+  reference = test$default,
+  positive = "yes")
+```
+
+#### Metrics : AUC ROC
+```{r}
+roc_rpart <- 
+  pROC::roc(response = test$default, 
+            predictor = model_rpart_pred[, "yes"])
+
+roc_rpart
+```
+
+#### Plot ROC Curve
+```{r}
+pROC::plot.roc(x = roc_glm, legacy.axes = FALSE, xlim = c(1, 0), asp = NA,
+               col = "green", print.auc = FALSE, print.auc.y = .4)
+
+pROC::plot.roc(x = roc_rpart, legacy.axes = FALSE, xlim = c(1, 0), asp = NA,
+               add = TRUE, col = "orange")
+
+legend(x = "bottomright", 
+       legend=c(sprintf("glm AUC = %s",round(roc_glm$auc[1],4)),
+                sprintf("rpart AUC = %s",round(roc_rpart$auc[1],4)) 
+                ), 
+       col = c("green", "blue"), lty = 1, cex = 1.0)
+
+
+```
+
+
+## Random Forest
+
+Hyperparameters: 
+- mtry: is the number of variables randomly sampled as candidates at each split;
+- ntree : the number of trees;
+- number : the number of folds;
+- repeats : the resampling iterations.
+
+```{r}
+ctrl <- 
+  trainControl(method = "repeatedcv", 
+               number = 5,
+               repeats = 1,
+               classProbs = TRUE,
+               summaryFunction = twoClassSummary,
+               verboseIter = FALSE,
+               allowParallel = TRUE)
+
+model_rf <-
+  train_down %>%
+  train(default ~ .,
+        data = .,
+        method = 'rf',
+        ntree = 100,
+        metric = "ROC",
+        preProc = c("center", "scale"),
+        trControl = ctrl)
+
+model_rf
+```
+
+#### Graphic representation of the model
+```{r}
+plot(model_rf$finalModel)
+```
+
+#### Model predictions
+```{r}
+model_rf_pred <- 
+  predict(model_rf, 
+          newdata = test,
+          type = "prob")
+```
+
+#### Confusion matrix
+```{r}
+caret::confusionMatrix(
+  data = as.factor(ifelse(model_rf_pred[, "yes"] > 0.5, "yes", "no")), 
+  reference = test$default,
+  positive = "yes")
+```
+
+#### Metrics : AUC ROC
+```{r}
+roc_rf <- 
+  pROC::roc(response = test$default, 
+            predictor = model_rf_pred[, "yes"])
+
+roc_rf
+```
+
+#### Plot ROC Curve
+```{r}
+pROC::plot.roc(x = roc_glm, legacy.axes = FALSE, xlim = c(1, 0), asp = NA,
+               col = "green", print.auc = FALSE, print.auc.y = .4)
+
+pROC::plot.roc(x = roc_rpart, legacy.axes = FALSE, xlim = c(1, 0), asp = NA,
+               add = TRUE, col = "blue")
+
+pROC::plot.roc(x = roc_rf, legacy.axes = FALSE, xlim = c(1, 0), asp = NA,
+               add = TRUE, col = "purple")
+
+legend(x = "bottomright", 
+       legend = c(sprintf("glm AUC = %s",round(roc_glm$auc[1],4)),
+                sprintf("rpart AUC = %s",round(roc_rpart$auc[1],4)),
+                sprintf("rf AUC = %s",round(roc_rf$auc[1],4))
+                ), 
+       col = c("green", "blue", "purple"), lty = 1, cex = 1.0)
+```
+
+
+## Stochastic Gradient Boosting
+
+Hyperparameters :
+- n.trees: total number of trees to be fitted;
+- interaction.depth : maximum depth of the interactions between the variables;
+- shrinkage : shrinkage parameter applied to each tree in the expansion;
+- n.minobsinnode : minimum number of observations in the terminal nodes of the trees.
+
+```{r}
+ctrl <- 
+  trainControl(method = "repeatedcv", 
+               number = 5,
+               repeats = 1,
+               classProbs = TRUE,
+               summaryFunction = twoClassSummary,
+               verboseIter = FALSE,
+               allowParallel = TRUE)
+
+model_gbm <- 
+   train_down %>%
+   train(default ~ ., 
+         data = ., 
+         method = "gbm",
+         metric = "ROC",
+         trControl = ctrl,
+         preProc = c("center", "scale"),
+         verbose = FALSE)
+
+model_gbm
+```
+
+#### Graphic representation of the model
+```{r}
+ggplot(model_gbm)
+```
+
+#### Model predictions
+```{r}
+model_gbm_pred <- 
+  predict(model_gbm, 
+          newdata = test,
+          type = "prob")
+```
+
+#### Confusion matrix
+```{r}
+caret::confusionMatrix(
+  data = as.factor(ifelse(model_gbm_pred[, "yes"] > 0.5, "yes", "no")), 
+  reference = test$default,
+  positive = "yes")
+```
+
+#### Metrics : AUC ROC
+```{r}
+roc_gbm <- 
+  pROC::roc(response = test$default, 
+            predictor = model_gbm_pred[, "yes"])
+
+roc_gbm
+```
+
+#### Plot  ROC Curve
+```{r}
+pROC::plot.roc(x = roc_glm, legacy.axes = FALSE, xlim = c(1, 0), asp = NA,
+               col = "green", print.auc = FALSE, print.auc.y = .4)
+
+pROC::plot.roc(x = roc_rpart, legacy.axes = FALSE, xlim = c(1, 0), asp = NA,
+               add = TRUE, col = "blue")
+
+pROC::plot.roc(x = roc_rf, legacy.axes = FALSE, xlim = c(1, 0), asp = NA,
+               add = TRUE, col = "purple")
+
+pROC::plot.roc(x = roc_gbm, legacy.axes = FALSE, xlim = c(1, 0), asp = NA,
+               add = TRUE, col = "orange")
+
+legend(x = "bottomright", 
+       legend = c(sprintf("glm AUC = %s",round(roc_glm$auc[1],4)),
+                sprintf("rpart AUC = %s",round(roc_rpart$auc[1],4)),
+                sprintf("rf AUC = %s",round(roc_rf$auc[1],4)),
+                sprintf("gbm AUC = %s",round(roc_gbm$auc[1],4))
+                ), 
+       col = c("green", "blue", "purple", "orange"), lty = 1, cex = 1.0)
+```
+
+--------------------------------------------------------------------------------------------------
+

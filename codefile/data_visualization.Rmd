@@ -1,0 +1,1006 @@
+---
+title: "EDA notebook"
+output: html_notebook
+---
+
+Author: lprtk
+
+Data Mining for credit risk
+
+
+# Exploratory Data Analysis (EDA)
+
+
+#### Librairies
+```{r}
+# Define the libraries to be used
+libraries_used <- 
+  c("dplyr", "funModeling", "ggplot2", "PerformanceAnalytics", "plotly", "scales", "tidyr")
+
+# Verification of installed libraries
+libraries_missing <- 
+  libraries_used[!(libraries_used %in% installed.packages()[,"Package"])]
+
+# Install missing libraries
+if(length(libraries_missing)) install.packages(libraries_missing)
+```
+
+
+#### Librairies import
+```{r}
+library(dplyr)
+library(funModeling)
+library(ggplot2)
+library(PerformanceAnalytics)
+library(plotly)
+library(scales)
+library(tidyr)
+```
+
+-------------------------------------------------------------------------------------------------
+
+#### Data import
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "/datamining")
+```
+
+
+```{r}
+data <- read.csv("data_lending_club.csv")
+```
+
+
+There are 151 variables in the database. We are not going to look at all of them one by one. Instead, we are going to target the most interesting ones and those that are likely to best explain why an investor might default.
+In addition, the graphical exploration of the database also aims to understand our data, to know how to clean them up, but also and above all to make our first hypotheses about the problem posed by the investment project.
+
+#### Data description
+```{r}
+structure_data <- str(data)
+structure_data
+```
+
+
+Previously, we took a very global view of the database in order to have a first overview. We can now look in more detail at the different variables that make up the database and begin to explore it.
+The cell below gives us a lot of information: 
+- Number of null values per variable as well as the proportions in percentage;
+- Number of missing values per variable as well as the proportions in percent;
+- Number of infinite values per variable as well as the proportions in percentage;
+- The type of each variable;
+- The number of unique values that each variable has.
+
+The first thing we see is that there seems to be no duplicates in the database. Why? The "Id" variable, which represents the unique Lending Club identifier of each borrower on the platform, has 20,000 unique values, or one per client.
+We also notice that some variables have 100% missing values (such as the "revol_bal_joint" characteristic) or proportions very close to 100% (the "annual_inc_joint" variable with 99.25% missing values). On the other hand, other variables have, fortunately, 0% of missing values.
+There is therefore a lot of work to be done on the treatment and management of missing values in the database.
+
+#### Data description
+```{r}
+detailled_data <- df_status(data, print_results = FALSE)
+detailled_data
+```
+
+
+Displaying the number of unique values within the different features is very informative because it gives us information about the informative quality of the feature with respect to the event to be modeled. To illustrate, if a characteristic displays a proportion of 0% of unique values, it means that all observations have exactly the same value for this variable. This variable does not allow us to discriminate between individuals for the phenomenon under study and de facto does not convey any information value. It can be removed for future analysis.
+On the other hand, a variable such as the annual income of a borrower that has 100% unique values (i.e. 20,000 different values) means that each client has a different income, which can be used to discriminate these clients with respect to our target variable to be modeled. This characteristic can therefore be kept for future modeling.
+It is therefore necessary to identify these variables that are constants in order to remove them and avoid any bias in our analysis.
+Example: "member_id", "issue_d", "policy_code", "hardship_length", "deferral_term", "next_pymnt_d", etc.
+
+#### Data description
+```{r}
+detailled_data <-
+  detailled_data %>%
+  mutate(uniq_rate = unique / nrow(data))
+
+detailled_data %>%
+  select(variable, unique, uniq_rate) %>%
+  mutate(unique = unique, uniq_rate = percent(uniq_rate))
+```
+
+-------------------------------------------------------------------------------------------------
+
+#### Function definition
+```{r}
+# Plot of subplots composed of a histogram and a boxplot
+plot_subplot <- function(data, column, bycolumn, title, xtitle, ytitle) {
+  
+    fig1 <- plot_ly(data, x = ~column, type = "histogram", marker = list(color = "#BCA9F5"))
+    fig2 <- plot_ly(data, y = ~column, x = ~bycolumn, type = "box", marker = list(color = "#82caaf"))
+    
+    fig <- subplot(fig1, fig2, nrows = 2) 
+    fig <- fig %>% layout(title = title,
+             plot_bgcolor="#FFFFFF", 
+             xaxis = list(
+               title = xtitle,
+               zerolinecolor = "#ffff", 
+               zerolinewidth = 2, 
+               gridcolor = "ffff"), 
+             yaxis = list(
+               title = ytitle,
+               zerolinecolor = "#ffff", 
+               zerolinewidth = 2, 
+               gridcolor = "ffff"), 
+             showlegend = FALSE,
+             showlegend2 = FALSE)
+    
+    return(fig)
+}
+
+# Plot histogram
+plot_histogram <- function(data, column, title, xtitle, ytitle) {
+  
+    fig <- plot_ly(data, x = ~column, type = "histogram", marker = list(color = '#82caaf'))
+    fig <- fig %>% layout(title = title,
+             xaxis = list(title = xtitle),
+             yaxis = list(title = ytitle))
+    
+    return(fig)
+}
+
+# Plot boxplot
+plot_box <- function(data, column, bycolumn, title, xtitle, ytitle) {
+  
+    fig <- plot_ly(data, y = ~column, x = ~bycolumn, type = "box", marker = list(color = "#BCA9F5"))
+    fig <- fig %>% layout(title = title,
+             xaxis = list(title = xtitle),
+             yaxis = list(title = ytitle))
+    
+    return(fig)
+}
+
+# Compute descriptive statistics
+descriptive_statistic1 <- function(data, column) {
+  
+    data %>%
+      summarise(Minimum = round(min(column), digits = 4),
+                Maximum = round(max(column), digits = 4),
+                Moyenne = round(mean(column), digits = 4),
+                Mediane = round(median(column), digits = 4),
+                Variance = round(var(column), digits = 4),
+                Volatilite = round(sd(column), digits = 4),
+                Kurtosis = round(kurtosis(column), digits = 4),
+                Skewness = round(skewness(column), digits = 4))
+}
+
+# Compute descriptive statistics
+descriptive_statistic2 <- function(data, column) {
+    data %>%
+      group_by(data$loan_status) %>%
+      summarise(Minimum = round(min(column), digits = 4),
+                Maximum = round(max(column), digits = 4),
+                Moyenne = round(mean(column), digits = 4),
+                Mediane = round(median(column), digits = 4),
+                Variance = round(var(column), digits = 4),
+                Volatilite = round(sd(column), digits = 4),
+                Kurtosis = round(kurtosis(column), digits = 4),
+                Skewness = round(skewness(column), digits = 4))
+}
+
+# Plot boxplot
+give_count <- 
+  stat_summary(fun.data = function(x) return(c(y = median(x)*1.06,
+                                               label = length(x))),
+               geom = "text")
+
+give_mean <- 
+  stat_summary(fun.y = mean, colour = "darkgreen", geom = "point", 
+               shape = 18, size = 3, show.legend = FALSE)
+
+ggplot_box <- function(data, xcolumn, ycolumn, bycolumn, title, xtitle, ytitle) {
+  
+  data %>%
+    ggplot(aes(xcolumn, ycolumn)) +
+    geom_boxplot(fill = "white", colour = "darkblue", 
+                 outlier.colour = "red", outlier.shape = 1) +
+    give_count +
+    give_mean +
+    scale_y_continuous(labels = comma) +
+    labs(title = title, x = xtitle, y = ytitle) +
+    facet_wrap(bycolumn)
+}
+```
+
+-------------------------------------------------------------------------------------------------
+
+# EDA
+
+`
+The objective of our EDA is not to visualize the 151 features of our database. Based on the data dictionary, our knowledge of credit risk and the research we have been able to do, we will present a graphical and statistical analysis of the characteristics that we believe are most important in increasing the probability of default. Here is a non-exhaustive list:
+- The customer's repayment history, whether he pays them on time or not; 
+- Personal details (place of residence, tenant or owner, socio-professional category, etc.);
+- The total amount due and the associated monthly payment; 
+- The current balance; 
+- When the first credit line was opened; 
+- The type of credit line (revolving, mortgage);
+- The reason for the loan;
+- The number of recently opened lines of credit and the total number of lines the borrower has; 
+- The number of open lines of credit that are in default or seriously delinquent;
+- The number of recent credit inquiries;
+- The credit score assigned to the file.
+`
+
+
+#### Variable : "loan_status"
+This is the current status of the loan. This characteristic takes several forms: a loan repaid or not, in progress or late payment.
+
+Observation: we notice that many loans, in the history of the platform, are fully repaid (70.8%). Then there is a significant share of loans that are in the process of being repaid (10.6%) but which are, at the moment, not repaid, and then a good share of loans that are not repaid at all (17.9%). There is a very small minority of payments that are late or in default (less than 1%).
+
+Intuition: this variable will be the target of our supervised Machine Learning models. We will therefore have to restructure this feature in order to have a 2-class classification problem. Our definition of default is the following: if the borrower does not pay back the loan on the due date fixed by the contract, then he is considered in default, even if he pays back several days / months / years later.
+Thus, on the one hand we will have borrowers who have fully repaid their loan and on the other, the remaining borrowers. A priori, the individuals in grace will be excluded from the modeling because they have not repaid but are in grace period. In addition, for loans in repayment we do not know whether the borrower is in arrears or not. Thus, we will also exclude them.
+
+```{r}
+data %>% count(loan_status)
+```
+
+```{r}
+fig <- plot_ly(data, labels = ~loan_status, type = "pie", marker = list(colors = c("#BCA9F5", "#82caaf", "#A9BCF5", "#A9F5BC", "#F7BE81", "#F78181")))
+fig <- fig %>% layout(title = "Loan status proportion",
+         xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+         yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
+
+fig
+```
+
+To continue our data visualization, we will create a predicate named "default" that will allow us to further visualize our different characteristics by contrasting defaulting borrowers with our healthy borrowers. This re-encoding is based on our previous intuition.
+
+```{r}
+data2 <- data
+
+data2 <- data2[!(data2$loan_status == "Current" | data2$loan_status == "In Grace Period"), ]
+
+default_var <- c("Charged Off", "Late (16-30 days)", "Late (31-120 days)")
+
+data2 <- data2 %>%
+  mutate(default = ifelse(!(loan_status %in% default_var), FALSE, TRUE))
+
+data2 %>%
+  summarise(default_freq = sum(default / n()))
+```
+
+We can see that following this definition and classification of default, 21% of the borrowers in our database are considered to be in default while 79% are healthy borrowers.
+
+```{r}
+table(data2$default) / nrow(data2)
+```
+
+
+#### Variable : "loan_amount"
+
+This is the loan amount requested by the borrower on the platform.
+
+Observation: Overall, the distribution of loan amounts requested is slightly skewed to the right. This indicates a positive skewness (0.61), thus an average higher than the median. 
+- 50% of the loans granted are for less than €14,000 (the median value).
+- The amounts of financing requests peak around each €5,000 level.
+- In general, loans that are fully repaid have the lowest average loan amount. For all other loan status terms, average loan amounts are higher.
+- No outliers for this variable. The minimum and maximum amounts are quite normal and fairly balanced across the different classes. Except for two classes. This may be due to the fact that this is a sample and not the total dataset.
+
+```{r}
+fig <- plot_subplot(data, data$loan_amnt, data$loan_status, "Loan amount variable", "Loan amount", "Count")
+fig
+```
+
+```{r}
+stat_desc <- descriptive_statistic1(data, data$loan_amnt)
+stat_desc
+```
+
+```{r}
+data %>%
+  group_by(loan_status) %>%
+  summarise(Minimum = round(min(loan_amnt), digits = 4),
+            Maximum = round(max(loan_amnt), digits = 4),
+            Moyenne = round(mean(loan_amnt), digits = 4),
+            Mediane = round(median(loan_amnt), digits = 4),
+            Variance = round(var(loan_amnt), digits = 4),
+            Ecart_type = round(sd(loan_amnt), digits = 4),
+            Kurtosis = round(kurtosis(loan_amnt), digits = 4),
+            Skewness = round(skewness(loan_amnt), digits = 4))
+```
+
+What about the amount granted for the loan according to the borrower's Lending Club credit grade? We notice that the amount granted tends to increase with the Lending Club credit grades. That is, the riskiest grades are the ones that borrow the largest amounts on average.
+For the distinction between grades, we see that borrowers in default (TRUE) borrow, on average, very slightly more than healthy borrowers (FALSE).
+
+```{r}
+ggplot_box(data2, data2$grade, data2$loan_amnt, data2$default, "Loan Amount by Grade", "Grade", "Loan amount \n")
+```
+
+What about the amount of the loan based on the verification of the borrower's annual income source? The average amounts borrowed are relatively close for the three modalities of the "verification_status" variable.
+
+```{r}
+data2 %>%
+  ggplot(aes(verification_status, loan_amnt)) +
+  geom_boxplot(fill = "white", colour = "darkblue", 
+               outlier.colour = "red", outlier.shape = 1) +
+  give_count +
+  give_mean +
+  scale_y_continuous(labels = comma) +
+  labs(title="Loan Amount by verification status", x = "Verification status", y = "Loan amount \n")
+```
+
+
+#### Variable : "funded_amnt"
+
+```{r}
+fig <- plot_subplot(data, data$funded_amnt, data$loan_status, "Funded amount variable", "Funded amount", "Count")
+fig
+```
+
+```{r}
+stat_desc <- descriptive_statistic1(data, data$funded_amnt)
+stat_desc
+```
+
+```{r}
+data %>%
+  group_by(loan_status) %>%
+  summarise(Minimum = round(min(funded_amnt), digits = 4),
+            Maximum = round(max(funded_amnt), digits = 4),
+            Moyenne = round(mean(funded_amnt), digits = 4),
+            Mediane = round(median(funded_amnt), digits = 4),
+            Variance = round(var(funded_amnt), digits = 4),
+            Ecart_type = round(sd(funded_amnt), digits = 4),
+            Kurtosis = round(kurtosis(funded_amnt), digits = 4),
+            Skewness = round(skewness(funded_amnt), digits = 4))
+```
+
+
+#### Variable : "int_rate"
+
+This is the interest rate of the loan.
+
+Observation: globally, the interest rate varies from 5% to 30% with a distribution rather centered on the left but well spread out on the right (positive skewness: 0.65). We notice a peak around 12/13% (average at 12.2%) and then a slow decrease until the maximum of the distribution (28.99%).
+What about inter-class differences? The interest rates remain relatively close, however, the average of borrowers who have repaid is 11.4%, while that of defaulters and other classes is over 14%. We find this same distinction in the median of the distributions. This is rather logical, if the risk of default increases, the interest rate also increases. We conclude that, on average, the higher the interest rate, the less the loan is repaid.
+
+Note that there seem to be several outliers for the first three classes in the graph. This will be dealt with in the pre-processing.
+
+Below, we will analyze in great detail this variable which is a real measure of risk in monetary and banking economics.
+
+```{r}
+fig <- plot_subplot(data, data$int_rate, data$loan_status, "Interest rate variable", "Interest rate", "Count")
+fig
+```
+
+```{r}
+stat_desc <- descriptive_statistic1(data, data$int_rate)
+stat_desc
+```
+
+```{r}
+data %>%
+  group_by(loan_status) %>%
+  summarise(Minimum = round(min(int_rate), digits = 4),
+            Maximum = round(max(int_rate), digits = 4),
+            Moyenne = round(mean(int_rate), digits = 4),
+            Mediane = round(median(int_rate), digits = 4),
+            Variance = round(var(int_rate), digits = 4),
+            Ecart_type = round(sd(int_rate), digits = 4),
+            Kurtosis = round(kurtosis(int_rate), digits = 4),
+            Skewness = round(skewness(int_rate), digits = 4))
+```
+
+What about the evolution of interest rates according to the loan maturity and the borrower's Lending Club credit grade?
+This is quite disturbing, as we expected to observe a stronger distinction between the different maturities. Indeed, in economics, logically, the longer the time horizon (i.e. the maturity), the higher the risks. Thus, normally the long-term interest rate (60 months) should be higher than that of a 36-month loan because the risk of default is greater in the long term.
+Overall, interest rates are similar for each credit grade regardless of the maturity of the loan.
+
+```{r}
+data2 %>%
+  ggplot(aes(grade, int_rate)) +
+  geom_boxplot(fill = "white", colour = "darkblue", 
+               outlier.colour = "red", outlier.shape = 1) +
+  give_count +
+  give_mean +
+  scale_y_continuous(labels = comma) +
+  labs(title="Interest Rate by Grade", x = "Grade", y = "Interest Rate \n") +
+  facet_wrap(~ term)
+```
+
+#### Average and median interest rate by credit grade Lending club
+```{r}
+data2 %>%
+  select(int_rate, grade) %>%
+  group_by(grade) %>%
+  summarise(int_rate_mean = mean(int_rate, na.rm = TRUE),
+            int_rate_median = median(int_rate, na.rm = TRUE),
+            n = n())
+```
+
+What about the interest rate depending on the borrower's status and owner_ship characteristic?
+The first thing to note is that interest rates are much higher for borrowers in default. Second, we note that borrowers who are in real estate leases have a higher average interest rate than those who are owners or in mortgages.
+Economically, this may make sense because the bank or investor knows that if this borrower cannot repay the loan, he or she still has some assets that can be used to repay the debt.
+
+```{r}
+ggplot_box(data2, data2$home_ownership, data2$int_rate, data2$default, "Interest Rate by Home Ownership", "Home Ownership", "Interest rate \n")
+```
+
+What about the interest rate by borrower status and purpose?
+As before, we note that average interest rates are slightly higher for clients in default.
+The question here is whether borrowing for a specific purpose increases the probability of default and, more importantly, whether there is an inter-class difference for the same investment purpose. This is indeed what we notice. Borrowing for the "small business" modality (borrowing for the creation and launch of one's business) increases the interest rate very strongly, regardless of the borrower's default pattern or not. The second reason for increasing the interest rate is borrowing for the purchase of a home. This is consistent with the fact that we had seen that renter clients had a higher interest rate since they are potentially the ones who take out loans to buy a house.
+
+Overall, we can see that interest rates have the potential to discriminate between borrowers who are in default and those who are not.
+
+```{r}
+data2 %>%
+  ggplot(aes(purpose, int_rate)) +
+  geom_boxplot(fill = "white", colour = "darkblue", 
+               outlier.colour = "red", outlier.shape = 1) +
+  give_count +
+  give_mean +
+  scale_y_continuous(labels = comma) +
+  facet_wrap(~ default) +
+  theme(axis.text.x = element_text(angle = 45))
+  labs(title="Interest Rate by Loan Purpose", x = "Loan purpose", y = "Interest rate \n")
+```
+
+What about the interest rate depending on the status of the borrower and its "verification_status" characteristic?
+As before, the interest rate increases with borrower status (TRUE or FLASE). Interest rates are lower, on average, for borrowers whose self-declaration of income has not been verified.
+
+```{r}
+ggplot_box(data2, data2$verification_status, data2$int_rate, data2$default, "Interest Rate by Verification Status", "Verification status", "Interest rate \n")
+```
+
+
+#### Variable : "installment"
+
+This is the monthly payment due by the borrower if the loan is granted.
+
+Observation: The amount of the payments varies widely, with a distribution that is fairly spread out to the right, which shows the presence of very large monthly payments (maximum monthly payment: $1354.66). With the boxplot, we do not see a significant difference between the monthly payments of a borrower who has fully repaid his loan and one who has defaulted, except for the minimum and maximum monthly payments.
+Overall, the average monthly payments of the classes are relatively close. Of course, it is the borrowers who have the lowest average monthly payments. For the median, the same thing is observed with a slightly stronger inter-class distinction. On the other hand, it is a borrower who has actually paid off his loan who has the highest monthly payment in our sample.
+Once again, several outliers are identified within this characteristic. We will see in the pre-processing how to deal with them.
+
+```{r}
+fig1 <- plot_ly(data, x = ~data$installment, type = "histogram", marker = list(color = "#BCA9F5"))
+fig2 <- plot_ly(data, y = ~data$installment, x = ~data$loan_status, type = "box", marker = list(color = "#82caaf"))
+
+fig <- subplot(fig1, fig2, nrows = 2) 
+fig <- fig %>% layout(title = "Installment variable",
+         plot_bgcolor="#FFFFFF", 
+         xaxis = list(
+           title = "Installment",
+           zerolinecolor = "#ffff", 
+           zerolinewidth = 2, 
+           gridcolor = "ffff"), 
+         yaxis = list(
+           title = "Count",
+           zerolinecolor = "#ffff", 
+           zerolinewidth = 2, 
+           gridcolor = "ffff"), 
+         showlegend = FALSE,
+         showlegend2 = FALSE)
+
+fig
+```
+
+```{r}
+stat_desc <- descriptive_statistic1(data, data$installment)
+stat_desc
+```
+
+```{r}
+data %>%
+  group_by(loan_status) %>%
+  summarise(Minimum = round(min(installment), digits = 4),
+            Maximum = round(max(installment), digits = 4),
+            Moyenne = round(mean(installment), digits = 4),
+            Mediane = round(median(installment), digits = 4),
+            Variance = round(var(installment), digits = 4),
+            Ecart_type = round(sd(installment), digits = 4),
+            Kurtosis = round(kurtosis(installment), digits = 4),
+            Skewness = round(skewness(installment), digits = 4))
+```
+
+What about the monthly payment depending on the amount borrowed and the borrower's status?
+
+```{r}
+ggplot_box(data2, data2$installment, data2$loan_amnt, data2$default, "Loan amount by Installment", "Installment", "Loan amount \n")
+```
+
+
+#### Categorical variables
+
+We will focus on the distributions of the different modalities for 6 categorical variables.
+- "home_ownership"
+- "term"
+- "verification_status"
+- "purpose"
+- "grade"
+- "pub_rec_bankruptcies"
+
+Observation:
+- The vast majority of people applying for loans are people who are in rent or mortgage => borrowers in precarious situations.
+- The vast majority of loans funded on the platform are for 36 months. About 75% of the total loans are granted for a 3-year term, while only 25% of the loans are granted for a 5-year term.
+- Most of the approved loans are of high quality. Nevertheless, a significant portion of loans are granted without verification.
+- Very few loans are granted to people who have already filed for bankruptcy, and therefore have a poor rating.
+- The vast majority of loans are granted to people who have not declared public bankruptcy.
+- Debt consolidation is by far the main reason for loan applications => borrowers in precarious situations.
+
+```{r}
+fig1 <- plot_histogram(data, data$home_ownership, "Home ownership distribution", "Home ownership", "Count")
+fig2 <- plot_histogram(data, data$term, "Loan term distribution", "Term", "Count")
+fig3 <- plot_histogram(data, data$verification_status, "Verified status proportion", "Verified status", "Count")
+fig4 <- plot_histogram(data, data$grade, "Credit grade repartition", "Grade", "Count")
+fig5 <- plot_histogram(data, data$pub_rec_bankruptcies, "Public bankruptcy distribution", "Public bankruptcy", "Count")
+fig6 <- plot_histogram(data, data$purpose, "Loan purpose repartition", "Purpose", "Count")
+
+fig <- subplot(fig1, fig2, fig3, fig4, fig5, fig6, nrows = 3, titleY = TRUE, titleX = TRUE, margin = 0.1)
+fig <- fig %>% layout(title = "Cetgorical variable",
+         plot_bgcolor="#FFFFFF", 
+         xaxis = list(
+           zerolinecolor = "#ffff", 
+           zerolinewidth = 2, 
+           gridcolor = "ffff"), 
+         yaxis = list(
+           zerolinecolor = "#ffff", 
+           zerolinewidth = 2, 
+           gridcolor = "ffff"), 
+         showlegend = FALSE,
+         showlegend2 = FALSE)
+
+fig
+```
+
+
+#### Variable : "sub_grade"
+
+The Lending Club platform assigns a grade and a sub-grade to each loan.
+
+Observation:
+- A and B grade loans are the safest.
+- D, E, F and G grade loans are less secure.
+- The majority of unpaid loans are in categories C and D.
+- Loans from category E, F and G onwards are risky and less numerous.
+- Thus, we can say that Lending Club's grading system works.
+
+```{r}
+fig <- plot_histogram(data, data$sub_grade, "Credit sub-grade distribution", "Sub-grade", "Count")
+fig
+```
+
+```{r}
+fig <- plot_box(data, data$grade, data$loan_status, "Credit grade distribution", "Grade", "Count")
+fig
+```
+
+```{r}
+fig <- plot_box(data, data$sub_grade, data$loan_status, "Credit sub-grade distribution", "Sub-grade", "Count")
+fig
+```
+
+
+#### Variable : annual income
+    
+The annual income self-reported by the borrower at enrollment.
+
+Observation: when we look at the distribution of annual income, we see that the distribution has many extreme values because the distribution is leptokurtic (kurtosis equal to 970.3) and very much spread to the right (the proof with a skewness of 18.7). We observe a gap of 10 000$ between the median and the mean.
+The means and medians of the different classes are relatively "close". On the other hand, we can see that for borrowers in grace period, their mean and median are abnormally high due to the low number of observations of this class in our sample.
+
+```{r}
+fig <- plot_subplot(data, data$annual_inc, data$loan_status, "Annual income variable", "Annual income", "Count")
+fig
+```
+
+```{r}
+stat_desc <- descriptive_statistic1(data, data$annual_inc)
+stat_desc
+```
+
+```{r}
+data %>%
+  group_by(loan_status) %>%
+  summarise(Minimum = round(min(annual_inc), digits = 4),
+            Maximum = round(max(annual_inc), digits = 4),
+            Moyenne = round(mean(annual_inc), digits = 4),
+            Mediane = round(median(annual_inc), digits = 4),
+            Variance = round(var(annual_inc), digits = 4),
+            Ecart_type = round(sd(annual_inc), digits = 4),
+            Kurtosis = round(kurtosis(annual_inc), digits = 4),
+            Skewness = round(skewness(annual_inc), digits = 4))
+```
+
+
+What about self-reported annual income by borrower's Lending Club credit grade and borrower status?
+We note that the highest rated grades have the highest annual income. Income decreases with grade.
+
+```{r}
+ggplot_box(data2, data2$grade, data2$annual_inc, data2$default, "Annual income by Grade", "Grade", "Annual income \n")
+```
+
+What about self-reported annual income by borrower's Lending Club credit grade and loan term?
+We have the impression that borrowers with the highest incomes and best grades borrow in the short term while those with the lowest annual income and worst grades borrow more in the long term.
+
+```{r}
+data2 %>%
+  ggplot(aes(grade, annual_inc)) +
+  geom_boxplot(fill = "white", colour = "darkblue", 
+               outlier.colour = "red", outlier.shape = 1) +
+  give_count +
+  give_mean +
+  scale_y_continuous(labels = comma) +
+  labs(title="Annual income by Grade", x = "Grade", y = "Annual income \n") +
+  facet_wrap(~ term)
+```
+
+
+#### Variable : addr state
+
+The state provided by the borrower in the loan application.
+
+Observation: the largest loans come from the state of California, followed by New York, Florida and Texas. This is to be expected as these are also the three most populous U.S. states. The states with higher default rates have very low numbers of loans. Therefore, the percentage is NOT significant and should be ignored. Overall, this variable does not affect the propensity to default.
+
+```{r}
+fig <- plot_histogram(data, data$addr_state, "Borrower's state", "US state", "Count")
+fig
+```
+
+Do some states in the United States have significantly higher default rates than others?
+- Oklahoma: 31.35%.
+- Nebraska: 30.43%.
+Oklahoma and Nebraska are the states with default rates above 30%.
+
+- Oregon: 13.25
+- South Dakota: 12.50%.
+Conversely, Oregon and South Dakota have the lowest default rates.
+
+The states can therefore have an informative power in the financial health of borrowers. Of course, in states where the employment rate and the urbanization rate are high, the default rate is lower.
+
+```{r}
+default_rate_state <- 
+  data2 %>%
+  select(default, addr_state) %>%
+  group_by(addr_state) %>%
+  summarise(default_rate = sum(default, na.rm = TRUE) / n())
+
+default_rate_state
+```
+
+
+#### Variable : "delinq_2yrs"
+
+The number of incidences of delinquency of more than 30 days on the borrower's credit file in the last two years.
+
+Observation: the risk of default is higher if this variable is greater than 1. Fortunately its median is equal to 0. We can see that there is not a very big difference between the classes. For example, the average of the borrowers in default is 0.36 number of incidents over the last 2 years against 0.33 number of incidents for the borrowers who have fully repaid their loan.
+
+```{r}
+fig <- plot_histogram(data, data$delinq_2yrs, "2 years delinq distribution", "2 years delinq", "Count")
+fig
+```
+
+```{r}
+stat_desc <- descriptive_statistic1(data, data$delinq_2yrs)
+stat_desc
+```
+
+```{r}
+data %>%
+  group_by(loan_status) %>%
+  summarise(Minimum = round(min(delinq_2yrs), digits = 4),
+            Maximum = round(max(delinq_2yrs), digits = 4),
+            Moyenne = round(mean(delinq_2yrs), digits = 4),
+            Mediane = round(median(delinq_2yrs), digits = 4),
+            Variance = round(var(delinq_2yrs), digits = 4),
+            Ecart_type = round(sd(delinq_2yrs), digits = 4),
+            Kurtosis = round(kurtosis(delinq_2yrs), digits = 4),
+            Skewness = round(skewness(delinq_2yrs), digits = 4))
+```
+
+What about the number of delinquencies over the last 2 years according to the borrower's Lending Club credit grade and the borrower's status?
+With the help of outliers, we can see that the number of delinquencies over the last two years tends to increase for borrowers in default and even more so for the worst credit grades for defaulting clients.
+
+```{r}
+ggplot_box(data2, data2$grade, data2$delinq_2yrs, data2$default, "Number of 2y delinq by Grade", "Grade", "Number of 2y delinq \n")
+```
+
+What about the number of delinquencies over the last 2 years according to the borrower's Lending Club credit grade and the loan term?
+With the help of outliers, we can see that the number of delinquencies over the last two years tends to increase for loans in default and even more so for the worst credit grades for long-term loans.
+
+```{r}
+data2 %>%
+  ggplot(aes(grade, delinq_2yrs)) +
+  geom_boxplot(fill = "white", colour = "darkblue", 
+               outlier.colour = "red", outlier.shape = 1) +
+  give_count +
+  give_mean +
+  scale_y_continuous(labels = comma) +
+  labs(title="Number of 2y delinq by Grade", x = "Grade", y = "Number of 2y delinq \n")+
+  facet_wrap(~ term)
+```
+
+
+#### Variable : "inq_last_6mths"
+
+Number of inquiries in the past 6 months (excluding vehicle and mortgage inquiries).
+
+Observation: borrowers with more than two inquiries have a significantly higher default rate.
+
+```{r}
+fig <- plot_histogram(data, data$inq_last_6mths, "Request for information distribution", "Request for information", "Count")
+fig
+```
+
+```{r}
+stat_desc <- descriptive_statistic1(data, data$inq_last_6mths)
+stat_desc
+```
+
+```{r}
+data %>%
+  group_by(loan_status) %>%
+  summarise(Minimum = round(min(inq_last_6mths), digits = 4),
+            Maximum = round(max(inq_last_6mths), digits = 4),
+            Moyenne = round(mean(inq_last_6mths), digits = 4),
+            Mediane = round(median(inq_last_6mths), digits = 4),
+            Variance = round(var(inq_last_6mths), digits = 4),
+            Ecart_type = round(sd(inq_last_6mths), digits = 4),
+            Kurtosis = round(kurtosis(inq_last_6mths), digits = 4),
+            Skewness = round(skewness(inq_last_6mths), digits = 4))
+```
+
+What about the number of inquiries in the past 6 months by borrower's Lending Club credit grade and borrower status?
+On average, as the credit grade deteriorates, the number of inquiries in the last 6 months tends to increase for both classes.
+
+```{r}
+ggplot_box(data2, data2$grade, data2$inq_last_6mths, data2$default, "Number of 6m inq by Grade", "Grade", "Number of 6m inq \n")
+```
+
+What about the number of inquiries in the past 6 months by borrower's Lending Club credit grade and loan term?
+On average, as the credit grade deteriorates, the number of inquiries over the last 6 months tends to increase for both loan horizons. However, we can see that the average number of inquiries over the last 6 months tends to increase more slowly for 60-month loans than for 36-month loans. In general, it is from grade D onwards that the average increases quite strongly compared to the previous grade.
+
+```{r}
+data2 %>%
+  ggplot(aes(grade, inq_last_6mths)) +
+  geom_boxplot(fill = "white", colour = "darkblue", 
+               outlier.colour = "red", outlier.shape = 1) +
+  give_count +
+  give_mean +
+  scale_y_continuous(labels = comma) +
+  labs(title="Number of 6m inq by Grade", x = "Grade", y = "Number of 6m inq \n")+
+  facet_wrap(~ term)
+```
+
+
+#### Variable : "open_acc"
+
+This is the number of open credit lines in the borrower's credit file.
+
+Observation: there is no significant difference between the credit lines of loans in default, or otherwise, and those of fully repaid loans (mean and median very close). Note that there are many outliers to process.
+
+```{r}
+fig <- plot_subplot(data, data$open_acc, data$loan_status, "Open credit line variable", "Open credit line", "Count")
+fig
+```
+
+```{r}
+stat_desc <- descriptive_statistic1(data, data$open_acc)
+stat_desc
+```
+
+```{r}
+data %>%
+  group_by(loan_status) %>%
+  summarise(Minimum = round(min(open_acc), digits = 4),
+            Maximum = round(max(open_acc), digits = 4),
+            Moyenne = round(mean(open_acc), digits = 4),
+            Mediane = round(median(open_acc), digits = 4),
+            Variance = round(var(open_acc), digits = 4),
+            Ecart_type = round(sd(open_acc), digits = 4),
+            Kurtosis = round(kurtosis(open_acc), digits = 4),
+            Skewness = round(skewness(open_acc), digits = 4))
+```
+
+
+#### Variable : "total_acc"
+
+This is the total number of credit lines currently on the borrower's credit file.
+
+Observation: There is no significant difference between the credit lines of loans in default, or otherwise, and those of loans that are fully repaid (mean and median very close). Note that there are many outliers to process.
+
+```{r}
+fig <- plot_subplot(data, data$total_acc, data$loan_status, "Totla credit line variable", "Totla credit line", "Count")
+fig
+```
+
+```{r}
+stat_desc <- descriptive_statistic1(data, data$total_acc)
+stat_desc
+```
+
+```{r}
+data %>%
+  group_by(loan_status) %>%
+  summarise(Minimum = round(min(total_acc), digits = 4),
+            Maximum = round(max(total_acc), digits = 4),
+            Moyenne = round(mean(total_acc), digits = 4),
+            Mediane = round(median(total_acc), digits = 4),
+            Variance = round(var(total_acc), digits = 4),
+            Ecart_type = round(sd(total_acc), digits = 4),
+            Kurtosis = round(kurtosis(total_acc), digits = 4),
+            Skewness = round(skewness(total_acc), digits = 4))
+```
+
+What about the number of open credit lines by borrower's Lending Club credit grade and borrower status?
+Here, we might have expected that borrowers in default would have more open credit lines. In reality, this is not really true. We even notice that there is not really a difference between the credit grades. For example, for healthy clients, the A grade has, on average, about 25 open credit lines in total over their lifetime, while the G grade has a little less. 
+This interpretation should be taken with great caution, as we do not have as many observations in these two credit grades and they are therefore not very comparable. The slight decrease in the number of open credit lines per borrower is explained by the decrease in the number of observations in the worst grades.
+
+```{r}
+ggplot_box(data2, data2$grade, data2$total_acc, data2$default, "Number of opened credit line by Grade", "Grade", "Number of opened credit line \n")
+```
+
+
+#### Variable  : "last_pymnt_amnt"
+
+Last total payment amount received.
+
+Observation: The amount of the last payment received is significantly lower for loans that are not paid off than for loans that are fully paid off. There is a fairly large gap between fully paid loans and the others: the mean and median are relatively much higher (mean fully paid 5837.84 versus mean charged off 455.21).
+Many outliers for the fully paid off modality.
+
+```{r}
+fig <- plot_subplot(data, data$last_pymnt_amnt, data$loan_status, "Total paid amount variable", "Total paid amount", "Count")
+fig
+```
+
+```{r}
+stat_desc <- descriptive_statistic1(data, data$last_pymnt_amnt)
+stat_desc
+```
+
+```{r}
+data %>%
+  group_by(loan_status) %>%
+  summarise(Minimum = round(min(last_pymnt_amnt), digits = 4),
+            Maximum = round(max(last_pymnt_amnt), digits = 4),
+            Moyenne = round(mean(last_pymnt_amnt), digits = 4),
+            Mediane = round(median(last_pymnt_amnt), digits = 4),
+            Variance = round(var(last_pymnt_amnt), digits = 4),
+            Ecart_type = round(sd(last_pymnt_amnt), digits = 4),
+            Kurtosis = round(kurtosis(last_pymnt_amnt), digits = 4),
+            Skewness = round(skewness(last_pymnt_amnt), digits = 4))
+```
+
+
+#### Variable : FICO score
+- fico_range_high
+- fico_range_low
+- last_fico_range_high
+- last_fico_range_low
+
+FICO credit scores are a method of quantifying and evaluating a person's creditworthiness. The scores range from 300 to 850, with those between 670 and 739 being considered "good" credit history, those between 740 and 799 being considered "very good" credit history, and scores above 800 being considered "excellent" credit history.
+
+Observation: it is obvious that the higher the FICO score, on average, the lower the risk of default. 
+
+First, we look at the lower limit of the range to which the borrower's FICO belongs at the time the loan is granted. We see that the distribution of scores is very much spread out to the right. There is therefore a strong positive skewness and the presence of extremely positive values.
+
+In a second step, we look at the range of limits to which the last FICO drawn from the borrower belongs. We find the same conclusion: the higher the FICO score, the lower the default risk on average. As for the distribution of scores, it seems to be relatively centered on "good" FICO scores.
+
+```{r}
+fig <- plot_subplot(data, data$fico_range_high, data$loan_status, "High FICO variable", "High FICO", "Count")
+fig
+```
+
+```{r}
+fig <- plot_subplot(data, data$fico_range_low, data$loan_status, "Low FICO variable", "Low FICO", "Count")
+fig
+```
+
+```{r}
+fig <- plot_subplot(data, data$last_fico_range_high, data$loan_status, "Last high FICO variable", "Last high FICO", "Count")
+fig
+```
+
+```{r}
+fig <- plot_subplot(data, data$last_fico_range_low, data$loan_status, "Last low FICO variable", "Last low FICO", "Count")
+fig
+```
+
+
+#### Variables : 
+- last_fico_range_high
+- last_fico_range_low
+- grade
+- sub_grade
+
+Observation: As we expected, the better the borrower's credit rating (grade and sub-grade), the better its FICO score. This is logical, as a good FICO score naturally corresponds to a good credit rating for the borrower.
+
+```{r}
+fig1 <- plot_box(data, data$last_fico_range_high, data$grade, "Last high FICO variable", "Last high FICO", "Count")
+fig2 <- plot_box(data, data$last_fico_range_low, data$grade, "Last low FICO variable", "Last low FICO", "Count")
+
+fig <- subplot(fig1, fig2, nrows = 2, titleY = TRUE, titleX = TRUE, margin = 0.1)
+fig <- fig %>% layout(title = "Last FICO by grade",
+         plot_bgcolor="#FFFFFF", 
+         xaxis = list(
+           zerolinecolor = "#ffff", 
+           zerolinewidth = 2, 
+           gridcolor = "ffff"), 
+         yaxis = list(
+           zerolinecolor = "#ffff", 
+           zerolinewidth = 2, 
+           gridcolor = "ffff"), 
+         showlegend = FALSE,
+         showlegend2 = FALSE)
+
+fig
+```
+
+```{r}
+fig1 <- plot_box(data, data$last_fico_range_high, data$sub_grade, "Last high FICO variable", "Last high FICO", "Count")
+fig2 <- plot_box(data, data$last_fico_range_low, data$sub_grade, "Last low FICO variable", "Last low FICO", "Count")
+
+fig <- subplot(fig1, fig2, nrows = 2, titleY = TRUE, titleX = TRUE, margin = 0.1)
+fig <- fig %>% layout(title = "Last FICO by grade",
+         plot_bgcolor="#FFFFFF", 
+         xaxis = list(
+           zerolinecolor = "#ffff", 
+           zerolinewidth = 2, 
+           gridcolor = "ffff"), 
+         yaxis = list(
+           zerolinecolor = "#ffff", 
+           zerolinewidth = 2, 
+           gridcolor = "ffff"), 
+         showlegend = FALSE,
+         showlegend2 = FALSE)
+
+fig
+```
+
+-------------------------------------------------------------------------------------------------
+
+# Summary of the EDA
+
+#### Potentially interesting characteristics
+```{r}
+data3 <- subset(data2, select = c("default", "loan_amnt", "funded_amnt", "int_rate", "installment", "annual_inc", "delinq_2yrs", "inq_last_6mths", "mths_since_last_delinq", "open_acc", "total_acc", "fico_range_high", "term", "grade", "home_ownership", "verification_status", "purpose", "addr_state", "application_type", "pub_rec_bankruptcies"))
+
+str(data3)
+```
+
+
+Making density graphs with KDE allows us to really visualize the inter-class distinction. For continuous variables, we can see that some features provide good information. Some examples: 
+- The FICO score, it is quite light but we can see that for borrowers who are not in default the scores tend to be higher. We even see that for the TRUE class there is a peak of observation at the beginning of the distribution which shows that a large proportion of the defaulting borrowers have low FICO scores;
+- The interest rate variable also clearly shows the divide between the two classes with rates that are higher for defaulting borrowers;
+- Defaulting borrowers also tend to borrow larger amounts, with the majority of healthy borrowers borrowing close to the average amount granted ($10/12k);
+- The total number of open lines of credit is not really discriminating in order to dissociate the two classes as we had previously reported when analyzing the characteristic;
+- Let us also note that the characteristics "loan_amnt" and "funded_amnt" have a very similar distribution of values which would indicate a strong redundancy of information thus an imperfect mutli-colinearity to be removed in order not to bias our future modeling.
+
+#### Plot of interesting quantitative characteristics
+```{r}
+num_vars <- data3 %>% sapply(is.numeric) %>% which() %>% names()
+
+data3 %>%
+  select_(.dots = num_vars) %>%
+  gather(measure, value) %>%
+  mutate(default = factor(rep(x = data3$default, 
+                              length.out = length(num_vars) * dim(data3)[1]), 
+                          levels = c("TRUE", "FALSE"))) %>%
+  ggplot(data = ., aes(x = value, fill = default, 
+                       color = default, order = -default)) +
+  geom_density(alpha = 0.3, size = 0.5) +
+  scale_fill_brewer(palette = "Set1") +
+  scale_color_brewer(palette = "Set1") +
+  facet_wrap( ~ measure, scales = "free", ncol = 3)
+```
+
+
+Regarding categorical variables:
+- Loan applications are generally for a single loan and not joint;
+- The proportion of borrowers in default is high in grades B, C, and D;
+- The proportion of borrowers in default is high for mortgage and leasehold borrowers;
+- Many defaulting borrowers obtained a loan for the reason of debt consolidation very primarily;
+- Loan maturity and status check do not confuse the two types of borrowers because the terms of the variables show the same proportions.
+
+#### Plot of qualitative characteristics of interest
+```{r}
+char_vars <- data3 %>% sapply(is.character) %>% which() %>% names()
+
+data3 %>%
+  select_(.dots = char_vars) %>%
+  gather(measure, value) %>%
+  mutate(default = factor(rep(x = data3$default, 
+                              length.out = length(char_vars) * dim(data3)[1]), 
+                          levels = c("TRUE", "FALSE"))) %>%
+  ggplot(data = ., aes(x = value, fill = default, 
+                       color = default, order = -default)) +
+  geom_histogram(stat = "count", alpha = 0.5) +
+  scale_fill_brewer(palette = "Set1") +
+  scale_color_brewer(palette = "Set1") +
+  facet_wrap( ~ measure, scales = "free", ncol = 3)
+```
+
+-------------------------------------------------------------------------------------------------
